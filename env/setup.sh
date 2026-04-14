@@ -32,6 +32,76 @@ echo "Conda env: $CONDA_DEFAULT_ENV"
 echo ""
 
 # ============================================================
+# 0. CUDA Toolkit 설치 (없으면 설치)
+# ============================================================
+echo "=== [0/5] CUDA Toolkit ==="
+if command -v nvcc &>/dev/null; then
+    echo "  Already installed: $(nvcc --version | grep 'release' | sed 's/.*release //')"
+else
+    echo "  nvcc not found. CUDA Toolkit 설치를 시도합니다..."
+
+    # GPU 드라이버에서 지원하는 CUDA 버전 확인
+    DRIVER_CUDA=$(nvidia-smi 2>/dev/null | grep -oP 'CUDA Version: \K[0-9]+\.[0-9]+' || echo "")
+    if [ -z "$DRIVER_CUDA" ]; then
+        echo "  ERROR: nvidia-smi를 실행할 수 없습니다. NVIDIA 드라이버를 먼저 설치하세요."
+        exit 1
+    fi
+    DRIVER_CUDA_MAJOR=$(echo "$DRIVER_CUDA" | cut -d. -f1)
+    DRIVER_CUDA_MINOR=$(echo "$DRIVER_CUDA" | cut -d. -f2)
+    echo "  Driver supports CUDA: ${DRIVER_CUDA}"
+
+    # CUDA Toolkit 버전 결정 (드라이버 지원 범위 내)
+    if [ "$DRIVER_CUDA_MAJOR" -ge 12 ] && [ "$DRIVER_CUDA_MINOR" -ge 4 ]; then
+        CUDA_TOOLKIT_VER="12-4"
+    elif [ "$DRIVER_CUDA_MAJOR" -ge 12 ]; then
+        CUDA_TOOLKIT_VER="12-1"
+    elif [ "$DRIVER_CUDA_MAJOR" -ge 11 ]; then
+        CUDA_TOOLKIT_VER="11-8"
+    else
+        echo "  ERROR: CUDA ${DRIVER_CUDA}은 지원하지 않습니다. (최소 11.8 필요)"
+        exit 1
+    fi
+
+    echo "  Installing cuda-toolkit-${CUDA_TOOLKIT_VER}..."
+    echo "  (sudo 권한이 필요합니다)"
+
+    # Ubuntu 버전 감지
+    UBUNTU_VER=$(lsb_release -rs 2>/dev/null | tr -d '.')
+    if [ -z "$UBUNTU_VER" ]; then
+        UBUNTU_VER="2004"  # fallback
+    fi
+
+    # NVIDIA CUDA 저장소 등록
+    wget -q "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu${UBUNTU_VER}/x86_64/cuda-ubuntu${UBUNTU_VER}.pin" \
+        -O /tmp/cuda-repo.pin
+    sudo mv /tmp/cuda-repo.pin /etc/apt/preferences.d/cuda-repository-pin-600
+    sudo apt-key adv --fetch-keys "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu${UBUNTU_VER}/x86_64/3bf863cc.pub" 2>/dev/null
+    sudo add-apt-repository -y "deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu${UBUNTU_VER}/x86_64/ /" 2>/dev/null
+    sudo apt-get update -qq
+
+    sudo apt-get install -y "cuda-toolkit-${CUDA_TOOLKIT_VER}"
+
+    # CUDA_HOME 설정 (현재 세션)
+    CUDA_TOOLKIT_VER_DOT=$(echo "$CUDA_TOOLKIT_VER" | tr '-' '.')
+    export CUDA_HOME="/usr/local/cuda-${CUDA_TOOLKIT_VER_DOT}"
+    export PATH="$CUDA_HOME/bin:$PATH"
+    export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$LD_LIBRARY_PATH"
+
+    # bashrc에 추가 (없으면)
+    if ! grep -q "CUDA_HOME" ~/.bashrc 2>/dev/null; then
+        echo "" >> ~/.bashrc
+        echo "# CUDA Toolkit" >> ~/.bashrc
+        echo "export CUDA_HOME=${CUDA_HOME}" >> ~/.bashrc
+        echo 'export PATH=$CUDA_HOME/bin:$PATH' >> ~/.bashrc
+        echo 'export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH' >> ~/.bashrc
+        echo "  CUDA_HOME added to ~/.bashrc"
+    fi
+
+    echo "  Installed: $(nvcc --version | grep 'release' | sed 's/.*release //')"
+fi
+echo ""
+
+# ============================================================
 # 1. PyTorch (시스템 CUDA 버전에 맞춰 자동 설치)
 # ============================================================
 echo "=== [1/5] PyTorch ==="
