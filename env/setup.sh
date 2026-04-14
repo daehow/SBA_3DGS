@@ -1,14 +1,12 @@
 #!/bin/bash
 # ============================================================
-# 3DGS + Custom BA 환경 셋업 스크립트
+# 3DGS + Custom BA 원클릭 셋업 스크립트
 # CUDA 12.1 고정
 #
 # 사용법:
-#   1. conda env create -f env/environment.yml
-#   2. conda activate 3dgs_sba
-#   3. bash env/setup.sh
+#   bash env/setup.sh
 #
-# 이 스크립트는 conda 환경이 활성화된 상태에서 실행해야 합니다.
+# conda 환경 생성부터 전부 자동으로 실행합니다.
 # ============================================================
 
 set -e  # 에러 발생 시 즉시 중단
@@ -23,13 +21,33 @@ echo " 3DGS + Custom BA Setup (CUDA 12.1)"
 echo " Project root: ${PROJECT_ROOT}"
 echo "============================================"
 
-# conda 환경 확인
-if [[ -z "$CONDA_DEFAULT_ENV" ]] || [[ "$CONDA_DEFAULT_ENV" == "base" ]]; then
-    echo "ERROR: conda 환경을 먼저 활성화하세요."
-    echo "  conda activate 3dgs_sba"
+# ============================================================
+# Conda 환경 생성 & 활성화
+# ============================================================
+echo "=== Conda 환경 ==="
+
+# conda 초기화 (bash에서 conda activate를 쓸 수 있도록)
+if [ -f "$HOME/anaconda3/etc/profile.d/conda.sh" ]; then
+    source "$HOME/anaconda3/etc/profile.d/conda.sh"
+elif [ -f "$HOME/miniconda3/etc/profile.d/conda.sh" ]; then
+    source "$HOME/miniconda3/etc/profile.d/conda.sh"
+elif [ -f "$(conda info --base 2>/dev/null)/etc/profile.d/conda.sh" ]; then
+    source "$(conda info --base)/etc/profile.d/conda.sh"
+else
+    echo "ERROR: conda를 찾을 수 없습니다. anaconda 또는 miniconda를 먼저 설치하세요."
     exit 1
 fi
-echo "Conda env: $CONDA_DEFAULT_ENV"
+
+# 환경이 이미 있으면 스킵, 없으면 생성
+if conda env list | grep -q "3dgs_sba"; then
+    echo "  환경 이미 존재: 3dgs_sba"
+else
+    echo "  환경 생성 중: 3dgs_sba..."
+    conda env create -f "${SCRIPT_DIR}/environment.yml"
+fi
+
+conda activate 3dgs_sba
+echo "  Activated: $CONDA_DEFAULT_ENV"
 echo ""
 
 # ============================================================
