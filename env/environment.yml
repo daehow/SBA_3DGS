@@ -1,0 +1,16 @@
+name: 3dgs_sba
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.10
+  - numpy
+  - scipy
+  - pillow
+  - matplotlib
+  - tqdm
+  - plyfile
+  - opencv
+  - ipykernel
+  - jupyter
+  - pip

@@ -1,0 +1,26 @@
+# Repos (각자 clone/build)
+repos/
+
+# Datasets (대용량)
+datasets/
+
+# 작업 디렉토리 (COLMAP 결과, BA 결과)
+colmap_ws*/
+
+# 학습 결과
+output/
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# 백업/실험 파일
+bundle_adjustment_full_sfm.py
+bundle_adjustment_pyceres.py
+
+# OS
+.DS_Store
