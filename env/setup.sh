@@ -32,13 +32,43 @@ echo "Conda env: $CONDA_DEFAULT_ENV"
 echo ""
 
 # ============================================================
-# 1. PyTorch (CUDA 12.1)
+# 1. PyTorch (시스템 CUDA 버전에 맞춰 자동 설치)
 # ============================================================
-echo "=== [1/5] PyTorch + CUDA 12.1 ==="
+echo "=== [1/5] PyTorch ==="
 if python -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
-    echo "  Already installed: $(python -c 'import torch; print(torch.__version__)')"
+    echo "  Already installed: $(python -c 'import torch; print(f"torch {torch.__version__}, CUDA {torch.version.cuda}")')"
 else
-    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+    # 시스템 CUDA 버전 감지
+    if command -v nvcc &>/dev/null; then
+        CUDA_VER=$(nvcc --version | grep -oP 'release \K[0-9]+\.[0-9]+')
+    elif [ -f /usr/local/cuda/version.txt ]; then
+        CUDA_VER=$(cat /usr/local/cuda/version.txt | grep -oP '[0-9]+\.[0-9]+')
+    else
+        CUDA_VER=$(nvidia-smi 2>/dev/null | grep -oP 'CUDA Version: \K[0-9]+\.[0-9]+' || echo "")
+    fi
+
+    if [ -z "$CUDA_VER" ]; then
+        echo "  ERROR: CUDA를 감지할 수 없습니다. nvidia-smi 또는 nvcc를 확인하세요."
+        exit 1
+    fi
+
+    # CUDA 버전 → PyTorch index URL 매핑
+    CUDA_MAJOR=$(echo "$CUDA_VER" | cut -d. -f1)
+    CUDA_MINOR=$(echo "$CUDA_VER" | cut -d. -f2)
+
+    if [ "$CUDA_MAJOR" -ge 12 ] && [ "$CUDA_MINOR" -ge 4 ]; then
+        TORCH_CUDA="cu124"
+    elif [ "$CUDA_MAJOR" -ge 12 ] && [ "$CUDA_MINOR" -ge 1 ]; then
+        TORCH_CUDA="cu121"
+    elif [ "$CUDA_MAJOR" -ge 11 ] && [ "$CUDA_MINOR" -ge 8 ]; then
+        TORCH_CUDA="cu118"
+    else
+        echo "  WARNING: CUDA ${CUDA_VER} 감지. 지원되는 최소 버전은 11.8입니다."
+        TORCH_CUDA="cu118"
+    fi
+
+    echo "  System CUDA: ${CUDA_VER} → PyTorch: ${TORCH_CUDA}"
+    pip install torch torchvision torchaudio --index-url "https://download.pytorch.org/whl/${TORCH_CUDA}"
     echo "  Installed."
 fi
 echo ""
