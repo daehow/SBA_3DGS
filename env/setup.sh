@@ -1,6 +1,7 @@
 #!/bin/bash
 # ============================================================
 # 3DGS + Custom BA 환경 셋업 스크립트
+# CUDA 12.1 고정
 #
 # 사용법:
 #   1. conda env create -f env/environment.yml
@@ -18,7 +19,7 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 REPOS_DIR="${PROJECT_ROOT}/repos"
 
 echo "============================================"
-echo " 3DGS + Custom BA Setup"
+echo " 3DGS + Custom BA Setup (CUDA 12.1)"
 echo " Project root: ${PROJECT_ROOT}"
 echo "============================================"
 
@@ -32,69 +33,46 @@ echo "Conda env: $CONDA_DEFAULT_ENV"
 echo ""
 
 # ============================================================
-# 0. CUDA Toolkit 설치 (없으면 설치)
+# 0. CUDA Toolkit 12.1 설치
 # ============================================================
-echo "=== [0/5] CUDA Toolkit ==="
+echo "=== [0/5] CUDA Toolkit 12.1 ==="
 if command -v nvcc &>/dev/null; then
-    echo "  Already installed: $(nvcc --version | grep 'release' | sed 's/.*release //')"
+    NVCC_VER=$(nvcc --version | grep -oP 'release \K[0-9]+\.[0-9]+')
+    echo "  nvcc found: ${NVCC_VER}"
+    if [[ "$NVCC_VER" != "12.1" ]]; then
+        echo "  WARNING: nvcc ${NVCC_VER} != 12.1. 호환성 문제가 발생할 수 있습니다."
+    fi
 else
-    echo "  nvcc not found. CUDA Toolkit 설치를 시도합니다..."
-
-    # GPU 드라이버에서 지원하는 CUDA 버전 확인
-    DRIVER_CUDA=$(nvidia-smi 2>/dev/null | grep -oP 'CUDA Version: \K[0-9]+\.[0-9]+' || echo "")
-    if [ -z "$DRIVER_CUDA" ]; then
-        echo "  ERROR: nvidia-smi를 실행할 수 없습니다. NVIDIA 드라이버를 먼저 설치하세요."
-        exit 1
-    fi
-    DRIVER_CUDA_MAJOR=$(echo "$DRIVER_CUDA" | cut -d. -f1)
-    DRIVER_CUDA_MINOR=$(echo "$DRIVER_CUDA" | cut -d. -f2)
-    echo "  Driver supports CUDA: ${DRIVER_CUDA}"
-
-    # CUDA Toolkit 버전 결정 (드라이버 지원 범위 내)
-    if [ "$DRIVER_CUDA_MAJOR" -ge 12 ] && [ "$DRIVER_CUDA_MINOR" -ge 4 ]; then
-        CUDA_TOOLKIT_VER="12-4"
-    elif [ "$DRIVER_CUDA_MAJOR" -ge 12 ]; then
-        CUDA_TOOLKIT_VER="12-1"
-    elif [ "$DRIVER_CUDA_MAJOR" -ge 11 ]; then
-        CUDA_TOOLKIT_VER="11-8"
-    else
-        echo "  ERROR: CUDA ${DRIVER_CUDA}은 지원하지 않습니다. (최소 11.8 필요)"
-        exit 1
-    fi
-
-    echo "  Installing cuda-toolkit-${CUDA_TOOLKIT_VER}..."
+    echo "  nvcc not found. CUDA Toolkit 12.1 설치..."
     echo "  (sudo 권한이 필요합니다)"
 
     # Ubuntu 버전 감지
     UBUNTU_VER=$(lsb_release -rs 2>/dev/null | tr -d '.')
     if [ -z "$UBUNTU_VER" ]; then
-        UBUNTU_VER="2004"  # fallback
+        UBUNTU_VER="2004"
     fi
 
-    # NVIDIA CUDA 저장소 등록
+    # NVIDIA CUDA 저장소 등록 & 설치
     wget -q "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu${UBUNTU_VER}/x86_64/cuda-ubuntu${UBUNTU_VER}.pin" \
         -O /tmp/cuda-repo.pin
     sudo mv /tmp/cuda-repo.pin /etc/apt/preferences.d/cuda-repository-pin-600
     sudo apt-key adv --fetch-keys "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu${UBUNTU_VER}/x86_64/3bf863cc.pub" 2>/dev/null
     sudo add-apt-repository -y "deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu${UBUNTU_VER}/x86_64/ /" 2>/dev/null
     sudo apt-get update -qq
+    sudo apt-get install -y cuda-toolkit-12-1
 
-    sudo apt-get install -y "cuda-toolkit-${CUDA_TOOLKIT_VER}"
+    # CUDA_HOME 설정
+    export CUDA_HOME=/usr/local/cuda-12.1
+    export PATH=$CUDA_HOME/bin:$PATH
+    export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
 
-    # CUDA_HOME 설정 (현재 세션)
-    CUDA_TOOLKIT_VER_DOT=$(echo "$CUDA_TOOLKIT_VER" | tr '-' '.')
-    export CUDA_HOME="/usr/local/cuda-${CUDA_TOOLKIT_VER_DOT}"
-    export PATH="$CUDA_HOME/bin:$PATH"
-    export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$LD_LIBRARY_PATH"
-
-    # bashrc에 추가 (없으면)
-    if ! grep -q "CUDA_HOME" ~/.bashrc 2>/dev/null; then
+    # bashrc에 추가
+    if ! grep -q "cuda-12.1" ~/.bashrc 2>/dev/null; then
         echo "" >> ~/.bashrc
-        echo "# CUDA Toolkit" >> ~/.bashrc
-        echo "export CUDA_HOME=${CUDA_HOME}" >> ~/.bashrc
+        echo "# CUDA 12.1" >> ~/.bashrc
+        echo "export CUDA_HOME=/usr/local/cuda-12.1" >> ~/.bashrc
         echo 'export PATH=$CUDA_HOME/bin:$PATH' >> ~/.bashrc
         echo 'export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH' >> ~/.bashrc
-        echo "  CUDA_HOME added to ~/.bashrc"
     fi
 
     echo "  Installed: $(nvcc --version | grep 'release' | sed 's/.*release //')"
@@ -102,43 +80,13 @@ fi
 echo ""
 
 # ============================================================
-# 1. PyTorch (시스템 CUDA 버전에 맞춰 자동 설치)
+# 1. PyTorch (CUDA 12.1)
 # ============================================================
-echo "=== [1/5] PyTorch ==="
+echo "=== [1/5] PyTorch (cu121) ==="
 if python -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
     echo "  Already installed: $(python -c 'import torch; print(f"torch {torch.__version__}, CUDA {torch.version.cuda}")')"
 else
-    # 시스템 CUDA 버전 감지
-    if command -v nvcc &>/dev/null; then
-        CUDA_VER=$(nvcc --version | grep -oP 'release \K[0-9]+\.[0-9]+')
-    elif [ -f /usr/local/cuda/version.txt ]; then
-        CUDA_VER=$(cat /usr/local/cuda/version.txt | grep -oP '[0-9]+\.[0-9]+')
-    else
-        CUDA_VER=$(nvidia-smi 2>/dev/null | grep -oP 'CUDA Version: \K[0-9]+\.[0-9]+' || echo "")
-    fi
-
-    if [ -z "$CUDA_VER" ]; then
-        echo "  ERROR: CUDA를 감지할 수 없습니다. nvidia-smi 또는 nvcc를 확인하세요."
-        exit 1
-    fi
-
-    # CUDA 버전 → PyTorch index URL 매핑
-    CUDA_MAJOR=$(echo "$CUDA_VER" | cut -d. -f1)
-    CUDA_MINOR=$(echo "$CUDA_VER" | cut -d. -f2)
-
-    if [ "$CUDA_MAJOR" -ge 12 ] && [ "$CUDA_MINOR" -ge 4 ]; then
-        TORCH_CUDA="cu124"
-    elif [ "$CUDA_MAJOR" -ge 12 ] && [ "$CUDA_MINOR" -ge 1 ]; then
-        TORCH_CUDA="cu121"
-    elif [ "$CUDA_MAJOR" -ge 11 ] && [ "$CUDA_MINOR" -ge 8 ]; then
-        TORCH_CUDA="cu118"
-    else
-        echo "  WARNING: CUDA ${CUDA_VER} 감지. 지원되는 최소 버전은 11.8입니다."
-        TORCH_CUDA="cu118"
-    fi
-
-    echo "  System CUDA: ${CUDA_VER} → PyTorch: ${TORCH_CUDA}"
-    pip install torch torchvision torchaudio --index-url "https://download.pytorch.org/whl/${TORCH_CUDA}"
+    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
     echo "  Installed."
 fi
 echo ""
@@ -294,10 +242,8 @@ echo "============================================"
 echo " Setup complete!"
 echo ""
 echo " 다음 단계:"
-echo "   1. 데이터셋 다운로드 (선택):"
-echo "      cd ${PROJECT_ROOT}/datasets"
-echo "      wget http://storage.googleapis.com/gresearch/refraw360/360_v2.zip"
-echo "      unzip 360_v2.zip -d mipnerf360"
+echo "   1. 데이터셋 다운로드:"
+echo "      bash env/mipnerf360.sh"
 echo ""
 echo "   2. 노트북 실행:"
 echo "      jupyter notebook notebooks/"
