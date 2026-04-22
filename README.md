@@ -1,77 +1,250 @@
-# 3DGS + Custom Bundle Adjustment
+# 실행 매뉴얼
 
-3D Gaussian Splatting 파이프라인에서 Bundle Adjustment를 직접 구현하고, COLMAP BA와 비교하는 프로젝트.
+모든 명령은 프로젝트 루트(`/home/hyoseok/projects/SBA_3DGS`)에서 실행.
 
-## Setup
+---
+
+## 빠른 실행 순서 (Quick Start)
+
+새 BA 방법론 `my_method` 를 추가하고, reproj error + 3DGS 품질까지 평가하는 최단 경로.
 
 ```bash
-# 원클릭 설치 (conda 환경 생성 + PyTorch + 3DGS + COLMAP)
-git clone https://github.com/daehow/SBA_3DGS.git
-cd SBA_3DGS
-bash env/setup.sh
+# 0) 환경 활성화
+conda activate 3dgs_sba
 
-# mipnerf360 데이터셋 다운로드 (~12GB)
-bash env/mipnerf360.sh
+# 1) 새 method 파일 생성 (파일명=함수명=namespace)
+#    python_ba/custom_bundle_adjustment/methods/my_method.py
+#    def my_method(recon, **kwargs) -> Reconstruction: ...
+#    (기본 예시: scipy_lm.py 복사 후 함수명만 my_method 로)
+
+# 2) BA 만 빠르게 (수 초~수 분) → reproj error 확인
+python python_ba/run_sba.py --scene bicycle -r 2 --sba-module-name my_method
+python python_ba/run_summary_ba.py --scene bicycle -r 2
+
+# 3) BA + 3DGS 풀 (~30~40 분) → PSNR/SSIM/LPIPS 확인
+python python_3dgs/run_sba_3dgs.py --scene bicycle -r 2 --sba-module-name my_method
+python python_3dgs/run_summary.py --scene bicycle -r 2 --gt vanilla
 ```
 
-> COLMAP 빌드 시 시스템 의존성이 필요합니다. `env/setup.sh` 내 안내를 참고하세요.
+**결과 위치**
+- BA 평가: `output_ba/bicycle/sba_my_method_r2/ba_stats.json` + `debug/reproj_error.png`
+- 3DGS 평가: `output_3dgs/bicycle/sba_my_method_r2/results.json` + `debug/metric_bar.png`
+- BA 요약 CSV: `output_ba/summary/{ts}.csv`
+- 3DGS 요약 CSV: `output_3dgs/summary/{ts}.csv`
 
-## Structure
+> method 없이 `--sba-module-name` 을 비우면 `passthrough` (COLMAP 결과 그대로) 가 기준선으로 실행됨.
 
-```
-├── env/
-│   ├── environment.yml      # Conda 환경 (Python, numpy, scipy 등)
-│   ├── setup.sh             # 원클릭 설치 (CUDA 12.1 고정)
-│   └── mipnerf360.sh        # 데이터셋 다운로드
-├── notebooks/
-│   ├── 3dgs_sba.ipynb                  # Custom BA + 3DGS (메인)
-│   ├── 3dgs_vanilla.ipynb              # Vanilla 3DGS (baseline)
-│   ├── 3dgs_vanilla_step_by_step.ipynb # 3DGS 단계별 실습 (교육용)
-│   └── dataset_check.ipynb            # 데이터셋 확인
-├── bundle_adjustment.py        # Custom BA 구현
-├── bundle_adjustment_utils.py  # 유틸리티 (COLMAP binary I/O, 기하 함수)
-└── manual/
-    └── setup.md                # 상세 셋업 매뉴얼
-```
+---
 
-## Notebooks
+## 새 BA 방법론(method) 추가하기 — 핵심 규약
 
-| 노트북 | 용도 |
-|--------|------|
-| `3dgs_sba.ipynb` | COLMAP 결과에 custom BA를 적용하고 3DGS 학습 → vanilla과 비교 |
-| `3dgs_vanilla.ipynb` | mipnerf360 데이터셋의 COLMAP 결과 그대로 3DGS 학습 (baseline) |
-| `3dgs_vanilla_step_by_step.ipynb` | 3DGS 내부 동작을 단계별로 실행하며 이해하는 교육용 노트북 |
-| `dataset_check.ipynb` | 데이터셋 이미지 크기, 카메라 파라미터 확인 |
+**파일명 == 함수명 == `--sba-module-name` 값.**
 
-### 3dgs_vanilla_step_by_step.ipynb
-
-3DGS의 학습 과정을 단계별로 시각화하는 교육용 노트북:
-
-1. **SfM sparse point 로딩** — COLMAP 포인트 클라우드 확인
-2. **Gaussian 초기화 디버그** — 5개 Gaussian의 position, opacity, scale, rotation, color 속성 출력
-3. **Gaussian 타원체 3D 시각화** — 초기 Gaussian을 scale/rotation 적용한 wireframe 타원체로 표시
-4. **초기 렌더링** — 학습 전 Train/Test 뷰 렌더링 vs GT
-5. **학습 루프** — 500 iteration마다 스냅샷 (Gaussian 수, 렌더링, PSNR)
-6. **Densification 그래프** — 포인트 수 변화, Loss, PSNR 추이
-7. **렌더링 비교** — Train/Test 뷰를 시간순으로 나열하여 학습 과정 시각화
-8. **학습 후 속성 분석** — opacity/scale 분포 변화, 포인트 클라우드 비교
-
-## Bundle Adjustment
-
-`bundle_adjustment.py`는 COLMAP의 BA 결과를 읽어서 scipy LM solver로 BA를 재실행합니다.
+모든 BA 방법론은 `python_ba/custom_bundle_adjustment/methods/{name}.py` 에 두고,
+그 파일 안에 **파일명과 동일한 이름의 함수**를 아래 고정 시그니처로 노출하면 끝.
 
 ```python
-from bundle_adjustment import BundleAdjustment
+# python_ba/custom_bundle_adjustment/methods/{name}.py
+from ..bundle_adjustment import Reconstruction
 
-ba = BundleAdjustment("path/to/sparse/0")  # COLMAP 결과 로드
-ba.run(max_iterations=50)                   # BA 실행
-ba.export("path/to/output/0")              # 결과 저장
+def {name}(recon: Reconstruction, **kwargs) -> Reconstruction:
+    # ... 여기에 최적화 로직 ...
+    return recon   # 같은 객체 in-place 수정 후 반환해도 OK
 ```
 
-### 비교 결과 (bicycle, mipnerf360)
+- 입력/출력 타입은 **`Reconstruction` 고정** (COLMAP sparse/0 를 `Reconstruction.load(path)` 로 얻고, 다 끝나면 `recon.save(path)`. 이건 run_sba.py 가 대신 해줌).
+- 파일명만 규약에 맞으면 `custom_bundle_adjustment.available()` 에서 자동 수집 → `--sba-module-name {name}` 으로 바로 호출 가능.
 
-| | COLMAP BA | Custom BA |
+### 예시: `scipy_lm` 의 동작 구조
+`python_ba/custom_bundle_adjustment/methods/scipy_lm.py` 가 존재하고, 그 안에
+`def scipy_lm(recon, max_iterations=50, **_) -> Reconstruction:` 이 정의돼 있음.
+그래서 터미널에서 `--sba-module-name scipy_lm` 를 넘기면 run_sba.py 가
+`scipy_lm(recon)` 을 호출하고 결과를 `output_ba/{scene}/sba_scipy_lm_r{N}/` 에 저장한다.
+
+### 새 method `my_method` 추가 흐름
+1. `python_ba/custom_bundle_adjustment/methods/my_method.py` 생성
+2. 안에 `def my_method(recon, **kwargs) -> Reconstruction:` 정의
+3. 실행: `python python_ba/run_sba.py --sba-module-name my_method`
+4. 결과: `output_ba/{scene}/sba_my_method_r{N}/ba_stats.json` + `debug/reproj_error.png`
+
+> `--sba-module-name` 을 비우면 `custom_bundle_adjustment.passthrough` 가 돌고 결과 라벨은 `passthrough`. 즉 "COLMAP 결과 그대로" 가 기준선이 됨.
+
+### 참고: `bundle_adjustment.py` 는 뭐가 다른가
+`python_ba/custom_bundle_adjustment/bundle_adjustment.py` 는 **라이브러리**
+(`Reconstruction` dataclass + `load/save/reprojection_errors/summary`, `passthrough()`).
+최적화 로직을 들고 있지 않다. method 저자는 이 파일을 건드리지 않고
+`methods/{name}.py` 만 추가하면 된다.
+
+---
+
+## 디렉토리 맵
+
+| 경로 | 용도 |
+|---|---|
+| `python_ba/` | BA 최적화 + 평가 스크립트 |
+| `python_ba/custom_bundle_adjustment/` | `Reconstruction` + `methods/{name}.py` |
+| `python_3dgs/` | 3DGS 학습/렌더/요약 스크립트 |
+| `colmap_ws_sba/{scene}_r{N}/` | 작업 디렉토리 (`images/`, `sparse_vanilla/0/`, `sparse/0/`) |
+| `output_ba/{scene}/sba_{ns}_r{N}/` | BA 평가 산출물 (`ba_stats.json`, `debug/reproj_error.png`) |
+| `output_3dgs/{scene}/{kind}/` | 3DGS 학습 산출물 (`results.json`, `point_cloud/`, ...) |
+
+`ns` 는 BA 방법론 이름(`passthrough`, `scipy_lm`, 사용자 추가). method 파일 규약:
+`python_ba/custom_bundle_adjustment/methods/{name}.py` 에 `def {name}(recon, **kw) -> Reconstruction`.
+
+---
+
+## 1. BA 만 실행 + 결과 보기
+
+방법론(methods/{name}.py)을 바꿔가며 reprojection error 가 어떻게 달라지는지 확인하는 빠른 루프.
+3DGS 학습은 돌리지 않아 수 초 ~ 수 분.
+
+### 실행
+```bash
+# pass-through (최적화 없이 COLMAP 결과 그대로)
+python python_ba/run_sba.py --scene bicycle -r 2
+
+# 특정 method 적용
+python python_ba/run_sba.py --scene bicycle -r 2 --sba-module-name scipy_lm
+
+# method 목록
+python -c "import sys; sys.path.insert(0,'python_ba'); \
+           import custom_bundle_adjustment as c; print(c.available())"
+```
+
+### 중요 옵션
+| 옵션 | 기본 | 설명 |
 |---|---|---|
-| Mean reproj error | 0.8753 px | 0.8587 px |
-| Median reproj error | 0.6961 px | 0.6502 px |
-| BA 시간 | - | ~40초 |
+| `--scene` | `bicycle` | bicycle, bonsai, counter, garden, kitchen, room, stump |
+| `-r`, `--resolution` | `4` | 1/2/4/8 |
+| `--sba-module-name` | 빈값 | `passthrough` · `scipy_lm` · 직접 추가한 이름 |
+| `--ba-iterations` | `50` | BA 최대 LM iteration |
+| `--run-colmap` | off | dataset 의 `sparse/0` 복사 대신 COLMAP 직접 실행 |
+| `--steps` | `prepare ba eval` | `prepare` / `ba` / `eval` 중 원하는 것만 |
+| `--no-debug` | — | reproj plot 저장 끔 |
+
+### 결과 위치
+```
+output_ba/{scene}/sba_{ns}_r{N}/
+├── ba_stats.json              # vanilla / after mean·median·std·<1px%
+└── debug/reproj_error.png     # histogram + CDF + stats bar
+```
+
+콘솔 마지막에 vanilla vs after 비교 표가 찍힘.
+
+---
+
+## 2. BA + 3DGS 풀 파이프라인
+
+BA 후 3DGS 학습 → 렌더 → 메트릭 까지 이어서 실행. 30k iter 기준 TITAN RTX 에서 30~40 분.
+
+### 실행
+```bash
+# vanilla baseline (BA 없이 3DGS 만)
+python python_3dgs/run_vanilla.py --scene bicycle -r 2
+
+# pass-through + 3DGS (BA 방법론 미적용 기준선)
+python python_3dgs/run_sba_3dgs.py --scene bicycle -r 2
+
+# scipy_lm BA + 3DGS
+python python_3dgs/run_sba_3dgs.py --scene bicycle -r 2 --sba-module-name scipy_lm
+
+# 이미 BA 는 돈 경우 3DGS 단계만
+python python_3dgs/run_sba_3dgs.py --scene bicycle -r 2 --sba-module-name scipy_lm \
+       --steps train render metrics
+```
+
+### 중요 옵션 (공용 + 3DGS 고유)
+| 옵션 | 기본 | 설명 |
+|---|---|---|
+| (위 1번의 모든 BA 옵션) | | |
+| `--iterations` | `30000` | 3DGS train iteration |
+| `--densify_grad_threshold` | `0.001` | |
+| `--data_device` | `cuda` | 이미지 텐서 상주 디바이스 |
+| `--steps` | `prepare ba eval train render metrics` | 원하는 단계만 |
+
+### 결과 위치
+```
+output_3dgs/{scene}/
+├── vanilla_r{N}/                   # run_vanilla.py 결과
+│   ├── results.json                # PSNR/SSIM/LPIPS
+│   ├── point_cloud/iteration_*/
+│   └── test/ours_30000/renders/
+└── sba_{ns}_r{N}/                  # run_sba_3dgs.py 결과
+    ├── ba_stats.json               # BA 단계에서 같이 생성
+    ├── results.json
+    ├── point_cloud/...
+    └── debug/metric_bar.png        # vanilla 비교 bar
+```
+
+---
+
+## 3. BA 방법론 결과 요약 (reprojection error)
+
+`output_ba/` 의 모든 `ba_stats.json` 을 긁어모아 CSV.
+
+### 실행
+```bash
+python python_ba/run_summary_ba.py                          # 전부
+python python_ba/run_summary_ba.py -r 2                     # r=2 만
+python python_ba/run_summary_ba.py --scene bicycle -r 2
+python python_ba/run_summary_ba.py --out /tmp/ba.csv        # CSV 경로 지정
+```
+
+### 결과
+```
+output_ba/summary/{YYYYMMDD_HHMMSS}.csv
+```
+컬럼: `scene, namespace, resolution, n_obs,
+vanilla_mean/median/lt1pct, after_mean/median/lt1pct, diff_mean/median, dir`
+
+콘솔 표 예:
+```
+scene      namespace    res  van mean  aft mean    diff  van med  aft med   diff     n_obs
+bicycle    scipy_lm     2     1.2699    1.2446  -0.0254  1.1191   1.0238 -0.0953   254,466
+```
+
+`diff_mean / diff_median` 이 **음수** 면 BA 로 reproj error 가 줄어든 것.
+
+---
+
+## 4. BA + 3DGS 품질 요약 (PSNR / SSIM / LPIPS)
+
+`output_3dgs/` 의 모든 `results.json` 을 긁어모아 CSV. vanilla 행을 GT 로 올릴 수도 있음.
+
+### 실행
+```bash
+python python_3dgs/run_summary.py                                   # 전부
+python python_3dgs/run_summary.py -r 2                              # r=2 만
+python python_3dgs/run_summary.py --scene bicycle -r 2
+python python_3dgs/run_summary.py --scene bicycle -r 2 --gt vanilla # vanilla 를 GT 상단에
+python python_3dgs/run_summary.py --iteration ours_7000             # 특정 iter 만
+```
+
+### 결과
+```
+output_3dgs/summary/{YYYYMMDD_HHMMSS}.csv
+```
+컬럼: `GT, scene, namespace, resolution, iteration, PSNR, SSIM, LPIPS, dir`
+
+콘솔 표 예:
+```
+GT   scene       namespace   res   iter           PSNR     SSIM    LPIPS
+GT   bicycle     vanilla     2     ours_30000   22.9046   0.5792   0.4786
+     bicycle     scipy_lm    2     ours_30000   23.7546   0.6129   0.4210
+```
+
+PSNR/SSIM 은 **높을수록**, LPIPS 는 **낮을수록** 좋음.
+
+---
+
+## 빠른 참조
+
+| 하고 싶은 일 | 스크립트 |
+|---|---|
+| vanilla 3DGS 만 | `python_3dgs/run_vanilla.py` |
+| BA method 개발·검증 (빠름) | `python_ba/run_sba.py` |
+| BA + 3DGS 풀 파이프라인 | `python_3dgs/run_sba_3dgs.py` |
+| BA 방법론 reproj error 요약 | `python_ba/run_summary_ba.py` |
+| BA+3DGS 품질 요약 | `python_3dgs/run_summary.py` |
+
+각 스크립트의 상세 옵션은 `--help` 로 확인.

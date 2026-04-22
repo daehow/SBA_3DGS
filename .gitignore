@@ -8,3 +8,15 @@ __pycache__/
 
 # OS
 .DS_Store
+
+# 데이터 / 생성물 (업로드 안 함)
+datasets/
+output_3dgs/
+output_ba/
+colmap_ws_sba/
+
+# 외부 repo 클론 (setup.sh 가 다시 받아옴)
+repos/
+
+# 로컬 편의 파일
+fast_exe.txt
